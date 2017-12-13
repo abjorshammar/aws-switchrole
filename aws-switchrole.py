@@ -62,7 +62,8 @@ def print_info(text):
 # given a list of config sections, return ones that look like profiles
 def get_profiles(config_sections):
     profiles = []
-    profile_pattern = re.compile('^profile (\w+)$')
+    profile_re = r'^profile ([A-Za-z0-9_-]+)$'
+    profile_pattern = re.compile(profile_re)
 
     for section in config_sections:
         result = profile_pattern.search(section)
@@ -73,11 +74,14 @@ def get_profiles(config_sections):
 
 
 # given a list of profiles, ask the user to pick one and return that.
-def get_profile_choice(profiles):
+def get_profile_choice(profiles, role_set):
     i = 0
     valid_choice = False
 
-    print_warning('please choose your profile:')
+    if role_set:
+        print_warning('please choose your profile to source role from:')
+    else:
+        print_warning('please choose your profile:')
 
     if profiles:
         for profile in profiles:
@@ -117,7 +121,14 @@ if __name__ == "__main__":
         '--profile',
         type=str,
         required=False,
-        help='profile in ~/.aws/config with role you want to switch to'
+        help='profile in ~/.aws/config to assume role with'
+    )
+
+    parser.add_argument(
+        '--role',
+        type=str,
+        required=False,
+        help='role in ~/.aws/config you want to switch to'
     )
 
     args = parser.parse_args()
@@ -125,28 +136,49 @@ if __name__ == "__main__":
     if args.profile:
         profile = args.profile
     else:
-        profile = get_profile_choice(profiles)
+        profile = get_profile_choice(profiles, True)
 
-    print_ok("using profile '{}'".format(profile))
-
-    try:
-        role = config.get("profile {}".format(profile), "role_arn")
-    except:
-        print_error(
-            "FATAL: couldn't find profile '{}' in '{}'".format(
-                profile,
-                config_file
+    if not args.role:
+        try:
+            role = config.get("profile {}".format(profile), "role_arn")
+        except:
+            print_error(
+                "FATAL: couldn't find a role_arn section in profile '{}'".format(
+                    profile,
+                    config_file
+                )
             )
-        )
 
+    # check if user want's to use the profile supplied to assume role
+    print_warning('do you want to use the profile from config when assuming your role? [y/n]')
+
+    valid_choice = False
+    while not valid_choice:
+        try:
+            choice = raw_input("-> ")
+        except ValueError:
+            choice = 0
+
+        if choice == 'y':
+            valid_choice = True
+            print_ok("using profile to source role '{}'".format(profile))
+
+        if choice == 'n':
+            valid_choice = True
+            profile = None
+
+        else:
+            print_warning('please choose a valid value [y/n]')
     # give our role switch session a name and build our aws command
-    session = profile + '-' + time.strftime('%d%m%y%H%M%S')
+    session = 'aws-switchrole-' + time.strftime('%d%m%y%H%M%S')
     cmd = [
         find_executable('aws'), 'sts', 'assume-role',
         '--role-arn', role,              # Role ARN
         '--role-session-name', session,  # Session ID given to temp credentials
-        '--profile', profile,            # Profile name from ~/.aws/config
     ]
+
+    if profile:
+        cmd.append('--profile ' + profile) # Profile name from ~/.aws/config
 
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE)
     out, err = process.communicate()
